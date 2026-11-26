@@ -7,6 +7,43 @@ import Foundation
 /// 静音 <audio>，让 WebKit 认为页面正在播放媒体，从而在后台继续运行。
 enum KeepAliveScript {
 
+    /// 在页面脚本之前注入：把 requestAnimationFrame 换成后台也能跑的定时器。
+    ///
+    /// 站点把地图画在 canvas 上，渲染循环靠 rAF 驱动。页面一进后台 rAF 就停，
+    /// 地图便不再重绘。改用 setTimeout 后，只要页面还被保活，就能继续以
+    /// 低帧率重绘，悬浮窗就能看到实时变化。
+    static let earlySource = """
+    (function () {
+      if (window.__kfRafPatched) { return; }
+      window.__kfRafPatched = true;
+
+      var nextId = 0;
+      var timers = {};
+
+      window.requestAnimationFrame = function (callback) {
+        var id = ++nextId;
+        var delay = 16;
+        try {
+          if (document.hidden) { delay = 250; }
+        } catch (error) {}
+        timers[id] = window.setTimeout(function () {
+          delete timers[id];
+          try {
+            callback(performance.now());
+          } catch (error) {}
+        }, delay);
+        return id;
+      };
+
+      window.cancelAnimationFrame = function (id) {
+        if (timers[id]) {
+          window.clearTimeout(timers[id]);
+          delete timers[id];
+        }
+      };
+    })();
+    """
+
     static let source = """
     (function () {
       if (window.__kfAudioReady) { return; }

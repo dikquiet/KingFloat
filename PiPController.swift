@@ -24,6 +24,7 @@ final class PiPController: NSObject {
     private var isPlaying = true
     private var captureInFlight = false
     private var enqueuedCount = 0
+    private var backgroundFrames = 0
     private var snapshotFailures = 0
     private var lastError = "none"
     private var mapRect: CGRect?
@@ -69,6 +70,7 @@ final class PiPController: NSObject {
         isPlaying = true
         frameIndex = 0
         enqueuedCount = 0
+        backgroundFrames = 0
         snapshotFailures = 0
         lastError = "none"
         prepareTimebase()
@@ -221,6 +223,9 @@ final class PiPController: NSObject {
         }
         displayLayer.enqueue(sample)
         enqueuedCount += 1
+        if UIApplication.shared.applicationState != .active {
+            backgroundFrames += 1
+        }
         reportStats()
     }
 
@@ -231,7 +236,7 @@ final class PiPController: NSObject {
         case .failed: layerStatus = "failed"
         default: layerStatus = "unknown"
         }
-        let text = "f=\(enqueuedCount) fail=\(snapshotFailures) layer=\(layerStatus) ready=\(displayLayer.isReadyForMoreMediaData ? 1 : 0) err=\(lastError)"
+        let text = "f=\(enqueuedCount) bg=\(backgroundFrames) fail=\(snapshotFailures) layer=\(layerStatus) ready=\(displayLayer.isReadyForMoreMediaData ? 1 : 0) err=\(lastError)"
         statsHandler?(text)
     }
 

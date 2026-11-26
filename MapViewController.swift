@@ -17,6 +17,9 @@ final class MapViewController: UIViewController {
 
     private var progressObservation: NSKeyValueObservation?
     private var hintWorkItem: DispatchWorkItem?
+    private var debugTimer: Timer?
+    private var audioState = "?"
+    private var pipStats = "idle"
 
     // MARK: - Lifecycle
 
@@ -27,6 +30,7 @@ final class MapViewController: UIViewController {
         buildStatusViews()
         buildControls()
         configurePiP()
+        startDebugPolling()
         loadSite()
     }
 
@@ -52,6 +56,11 @@ final class MapViewController: UIViewController {
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: KeepAliveScript.earlySource,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true))
         configuration.userContentController.addUserScript(
             WKUserScript(
                 source: KeepAliveScript.source,
@@ -235,7 +244,9 @@ final class MapViewController: UIViewController {
             self?.showAlert(title: "悬浮窗没能打开", message: message)
         }
         pip.statsHandler = { [weak self] text in
-            self?.debugLabel.text = "pip: \(text)"
+            guard let self else { return }
+            self.pipStats = text
+            self.updateDebugLabel()
         }
     }
 
@@ -276,6 +287,32 @@ final class MapViewController: UIViewController {
     }
 
     // MARK: - Helpers
+
+    private func startDebugPolling() {
+        let timer = Timer(
+            timeInterval: 2,
+            target: self,
+            selector: #selector(pollAudioState),
+            userInfo: nil,
+            repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        debugTimer = timer
+        pollAudioState()
+    }
+
+    @objc private func pollAudioState() {
+        guard let webView else { return }
+        let script = "(function(){try{var a=window.__kfAudio;if(!a){return 'none';}return a.paused?'paused':'playing';}catch(e){return 'err';}})()"
+        webView.evaluateJavaScript(script) { [weak self] result, _ in
+            guard let self else { return }
+            self.audioState = (result as? String) ?? "?"
+            self.updateDebugLabel()
+        }
+    }
+
+    private func updateDebugLabel() {
+        debugLabel.text = "pip: \(pipStats) audio=\(audioState)"
+    }
 
     private func showHint(_ text: String) {
         hintWorkItem?.cancel()
@@ -323,6 +360,7 @@ final class MapViewController: UIViewController {
     deinit {
         progressObservation?.invalidate()
         hintWorkItem?.cancel()
+        debugTimer?.invalidate()
     }
 }
 
