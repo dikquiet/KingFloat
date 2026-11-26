@@ -29,6 +29,8 @@ enum ImageFrame {
         let height = max(2, Int((sourceHeight * scale).rounded()))
 
         let attributes: CFDictionary = [
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+            kCVPixelBufferMetalCompatibilityKey: true,
             kCVPixelBufferCGImageCompatibilityKey: true,
             kCVPixelBufferCGBitmapContextCompatibilityKey: true
         ] as CFDictionary

@@ -8,6 +8,7 @@ final class PiPController: NSObject {
 
     var stateHandler: ((Bool) -> Void)?
     var failureHandler: ((String) -> Void)?
+    var statsHandler: ((String) -> Void)?
 
     var isRunning: Bool { isActive }
 
@@ -16,11 +17,15 @@ final class PiPController: NSObject {
     private var pictureInPictureController: AVPictureInPictureController?
     private var possibilityObservation: NSKeyValueObservation?
     private var refreshTimer: Timer?
+    private var timebase: CMTimebase?
     private var frameIndex: Int64 = 0
     private var isActive = false
     private var isStarting = false
     private var isPlaying = true
     private var captureInFlight = false
+    private var enqueuedCount = 0
+    private var snapshotFailures = 0
+    private var lastError = "none"
 
     func attach(webView: WKWebView, hostView: UIView) {
         self.webView = webView
@@ -39,6 +44,11 @@ final class PiPController: NSObject {
         pictureInPictureController = controller
     }
 
+    func updateLayerFrame(_ bounds: CGRect) {
+        // 画中画内容由 sample buffer 决定，layer 只作为挂载点，保持很小的尺寸即可。
+        displayLayer.frame = CGRect(x: 0, y: 0, width: 2, height: 2)
+    }
+
     func start() {
         guard !isActive, !isStarting else { return }
         guard let controller = pictureInPictureController else {
@@ -52,8 +62,15 @@ final class PiPController: NSObject {
 
         isStarting = true
         isPlaying = true
+        frameIndex = 0
+        enqueuedCount = 0
+        snapshotFailures = 0
+        lastError = "none"
+        prepareTimebase()
+        enqueueTestPattern()
         captureFrame()
         startRefreshTimer()
+        reportStats()
 
         if controller.isPictureInPicturePossible {
             beginPictureInPicture()
@@ -90,6 +107,35 @@ final class PiPController: NSObject {
         }
     }
 
+    // MARK: - Timebase
+
+    private func prepareTimebase() {
+        var tb: CMTimebase?
+        let status = CMTimebaseCreateWithSourceClock(
+            allocator: kCFAllocatorDefault,
+            sourceClock: CMClockGetHostTimeClock(),
+            timebaseOut: &tb)
+        guard status == noErr, let tb else {
+            timebase = nil
+            return
+        }
+        CMTimebaseSetTime(tb, time: .zero)
+        CMTimebaseSetRate(tb, rate: 1)
+        displayLayer.controlTimebase = tb
+        timebase = tb
+    }
+
+    private func nextPresentationIndex() -> Int64 {
+        if let timebase {
+            let seconds = CMTimeGetSeconds(CMTimebaseGetTime(timebase))
+            if seconds.isFinite, seconds >= 0 {
+                return Int64((seconds * 2).rounded(.down))
+            }
+        }
+        frameIndex += 1
+        return frameIndex
+    }
+
     // MARK: - Frames
 
     private func startRefreshTimer() {
@@ -115,26 +161,55 @@ final class PiPController: NSObject {
 
         let configuration = WKSnapshotConfiguration()
         configuration.snapshotWidth = NSNumber(value: 360)
-        configuration.afterScreenUpdates = false
+        configuration.afterScreenUpdates = true
 
-        webView.takeSnapshot(with: configuration) { [weak self] image, _ in
+        webView.takeSnapshot(with: configuration) { [weak self] image, error in
             guard let self else { return }
             self.captureInFlight = false
-            guard let image,
-                  let sample = ImageFrame.makeSampleBuffer(
-                    from: image,
-                    maxDimension: 900,
-                    frameIndex: self.frameIndex) else { return }
-
-            self.frameIndex += 1
-            if !self.displayLayer.isReadyForMoreMediaData {
-                self.displayLayer.flush()
+            guard let image else {
+                self.snapshotFailures += 1
+                self.lastError = error?.localizedDescription ?? "snapshot nil"
+                self.reportStats()
+                return
             }
-            self.displayLayer.enqueue(sample)
+            self.enqueue(image: image)
         }
     }
 
-    // MARK: - State
+    private func enqueueTestPattern() {
+        guard let image = PiPController.makeTestImage() else { return }
+        enqueue(image: image)
+    }
+
+    private func enqueue(image: UIImage) {
+        let presentationIndex = nextPresentationIndex()
+        guard let sample = ImageFrame.makeSampleBuffer(
+            from: image,
+            maxDimension: 900,
+            frameIndex: presentationIndex) else {
+            lastError = "buffer create failed"
+            reportStats()
+            return
+        }
+
+        if displayLayer.status == .failed {
+            displayLayer.flush()
+        }
+        displayLayer.enqueue(sample)
+        enqueuedCount += 1
+        reportStats()
+    }
+
+    private func reportStats() {
+        let layerStatus: String
+        switch displayLayer.status {
+        case .rendering: layerStatus = "rendering"
+        case .failed: layerStatus = "failed"
+        default: layerStatus = "unknown"
+        }
+        let text = "f=\(enqueuedCount) fail=\(snapshotFailures) layer=\(layerStatus) ready=\(displayLayer.isReadyForMoreMediaData ? 1 : 0) err=\(lastError)"
+        statsHandler?(text)
+    }
 
     private func beginPictureInPicture() {
         guard isStarting, !isActive, let controller = pictureInPictureController else { return }
@@ -153,7 +228,52 @@ final class PiPController: NSObject {
         refreshTimer = nil
         possibilityObservation?.invalidate()
         possibilityObservation = nil
+        timebase = nil
+        displayLayer.controlTimebase = nil
+        displayLayer.flush()
         stateHandler?(false)
+    }
+
+    private static func makeTestImage() -> UIImage? {
+        let size = CGSize(width: 720, height: 1280)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { context in
+            let colors: [CGColor] = [
+                UIColor(red: 0.03, green: 0.09, blue: 0.13, alpha: 1).cgColor,
+                UIColor(red: 0.05, green: 0.35, blue: 0.22, alpha: 1).cgColor
+            ]
+            let locations: [CGFloat] = [0, 1]
+            if let gradient = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: colors as CFArray,
+                locations: locations) {
+                context.cgContext.drawLinearGradient(
+                    gradient,
+                    start: .zero,
+                    end: CGPoint(x: 0, y: size.height),
+                    options: [])
+            }
+
+            let titleAttributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 86, weight: .heavy),
+                .foregroundColor: UIColor.white
+            ]
+            let subtitleAttributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.monospacedSystemFont(ofSize: 44, weight: .medium),
+                .foregroundColor: UIColor(white: 1, alpha: 0.7)
+            ]
+
+            let title = "KINGFLOAT" as NSString
+            let subtitle = "TEST FRAME" as NSString
+            let titleSize = title.size(withAttributes: titleAttributes)
+            let subtitleSize = subtitle.size(withAttributes: subtitleAttributes)
+            title.draw(
+                at: CGPoint(x: (size.width - titleSize.width) / 2, y: size.height / 2 - 120),
+                withAttributes: titleAttributes)
+            subtitle.draw(
+                at: CGPoint(x: (size.width - subtitleSize.width) / 2, y: size.height / 2 + 20),
+                withAttributes: subtitleAttributes)
+        }
     }
 
     deinit {
@@ -213,6 +333,7 @@ extension PiPController: AVPictureInPictureSampleBufferPlaybackDelegate {
     func pictureInPictureControllerTimeRangeForPlayback(
         _ pictureInPictureController: AVPictureInPictureController
     ) -> CMTimeRange {
+        // 实时内容，固定返回“无限长”的直播时间范围。
         CMTimeRange(start: .zero, duration: .positiveInfinity)
     }
 

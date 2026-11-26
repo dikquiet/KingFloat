@@ -12,6 +12,7 @@ final class MapViewController: UIViewController {
     private var spinner: UIActivityIndicatorView!
     private var statusLabel: UILabel!
     private var hintLabel: PaddedLabel!
+    private var debugLabel: UILabel!
     private var pipButton: UIButton!
 
     private var progressObservation: NSKeyValueObservation?
@@ -34,6 +35,11 @@ final class MapViewController: UIViewController {
         if !pip.isRunning {
             silentAudio.stop()
         }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        pip.updateLayerFrame(view.bounds)
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
@@ -121,6 +127,15 @@ final class MapViewController: UIViewController {
         hintLabel.alpha = 0
         view.addSubview(hintLabel)
 
+        debugLabel = UILabel()
+        debugLabel.translatesAutoresizingMaskIntoConstraints = false
+        debugLabel.font = .monospacedSystemFont(ofSize: 9, weight: .regular)
+        debugLabel.textColor = UIColor(white: 1, alpha: 0.6)
+        debugLabel.backgroundColor = UIColor(white: 0, alpha: 0.35)
+        debugLabel.numberOfLines = 2
+        debugLabel.text = "pip: idle"
+        view.addSubview(debugLabel)
+
         NSLayoutConstraint.activate([
             progressView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             progressView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -133,7 +148,11 @@ final class MapViewController: UIViewController {
 
             hintLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
             hintLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            hintLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 330)
+            hintLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 330),
+
+            debugLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            debugLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 48),
+            debugLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 340)
         ])
     }
 
@@ -205,6 +224,9 @@ final class MapViewController: UIViewController {
         }
         pip.failureHandler = { [weak self] message in
             self?.showAlert(title: "悬浮窗没能打开", message: message)
+        }
+        pip.statsHandler = { [weak self] text in
+            self?.debugLabel.text = "pip: \(text)"
         }
     }
 
