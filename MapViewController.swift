@@ -58,6 +58,15 @@ final class MapViewController: UIViewController {
                 injectionTime: .atDocumentEnd,
                 forMainFrameOnly: false))
 
+        let mapRectHandler = MapRectHandler()
+        mapRectHandler.pip = pip
+        configuration.userContentController.add(mapRectHandler, name: "mapRect")
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: MapRectScript.source,
+                injectionTime: .atDocumentEnd,
+                forMainFrameOnly: true))
+
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.navigationDelegate = self
@@ -423,5 +432,67 @@ final class PaddedLabel: UILabel {
         return CGSize(
             width: size.width + textInsets.left + textInsets.right,
             height: size.height + textInsets.top + textInsets.bottom)
+    }
+}
+
+// MARK: - 地图区域定位
+
+enum MapRectScript {
+
+    static let source = """
+    (function () {
+      function findMap() {
+        var direct = document.querySelector('img[src*="map.txt.png"]');
+        if (direct) { return direct; }
+        var styled = document.querySelector('[style*="map.txt.png"]');
+        if (styled) { return styled; }
+        var canvases = document.querySelectorAll('canvas');
+        var best = null;
+        var bestArea = 0;
+        for (var i = 0; i < canvases.length; i++) {
+          var rect = canvases[i].getBoundingClientRect();
+          var area = rect.width * rect.height;
+          if (area > bestArea) { bestArea = area; best = canvases[i]; }
+        }
+        return best;
+      }
+
+      function send() {
+        try {
+          var element = findMap();
+          if (!element) { return; }
+          var rect = element.getBoundingClientRect();
+          if (rect.width < 80 || rect.height < 80) { return; }
+          window.webkit.messageHandlers.mapRect.postMessage({
+            x: rect.left, y: rect.top, w: rect.width, h: rect.height
+          });
+        } catch (error) {}
+      }
+
+      window.__kfSendMapRect = send;
+      window.addEventListener('resize', send);
+      window.addEventListener('orientationchange', send);
+      window.setInterval(send, 2000);
+      send();
+    })();
+    """
+}
+
+final class MapRectHandler: NSObject, WKScriptMessageHandler {
+
+    weak var pip: PiPController?
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        guard message.name == "mapRect",
+              let body = message.body as? [String: Any],
+              let x = (body["x"] as? NSNumber)?.doubleValue,
+              let y = (body["y"] as? NSNumber)?.doubleValue,
+              let width = (body["w"] as? NSNumber)?.doubleValue,
+              let height = (body["h"] as? NSNumber)?.doubleValue else { return }
+
+        pip?.updateMapRect(CGRect(x: x, y: y, width: width, height: height))
     }
 }

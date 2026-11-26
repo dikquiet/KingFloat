@@ -26,6 +26,7 @@ final class PiPController: NSObject {
     private var enqueuedCount = 0
     private var snapshotFailures = 0
     private var lastError = "none"
+    private var mapRect: CGRect?
 
     func attach(webView: WKWebView, hostView: UIView) {
         self.webView = webView
@@ -47,6 +48,10 @@ final class PiPController: NSObject {
     func updateLayerFrame(_ bounds: CGRect) {
         // 画中画内容由 sample buffer 决定，layer 只作为挂载点，保持很小的尺寸即可。
         displayLayer.frame = CGRect(x: 0, y: 0, width: 2, height: 2)
+    }
+
+    func updateMapRect(_ rect: CGRect) {
+        mapRect = rect
     }
 
     func start() {
@@ -162,6 +167,7 @@ final class PiPController: NSObject {
         let configuration = WKSnapshotConfiguration()
         configuration.snapshotWidth = NSNumber(value: 360)
         configuration.afterScreenUpdates = true
+        configuration.rect = captureRect(for: webView)
 
         webView.takeSnapshot(with: configuration) { [weak self] image, error in
             guard let self else { return }
@@ -174,6 +180,23 @@ final class PiPController: NSObject {
             }
             self.enqueue(image: image)
         }
+    }
+
+    /// 只截地图区域；拿不到地图位置时退回“页面中上部方形”的默认区域。
+    private func captureRect(for webView: WKWebView) -> CGRect {
+        let bounds = CGRect(origin: .zero, size: webView.bounds.size)
+        guard bounds.width > 0, bounds.height > 0 else { return .zero }
+
+        if let mapRect, mapRect.width > 80, mapRect.height > 80 {
+            let clipped = mapRect.intersection(bounds)
+            if clipped.width > 80, clipped.height > 80 {
+                return clipped
+            }
+        }
+
+        let side = min(bounds.width, bounds.height)
+        let y = min(max(0, bounds.height * 0.16), max(0, bounds.height - side))
+        return CGRect(x: 0, y: y, width: bounds.width, height: side)
     }
 
     private func enqueueTestPattern() {
