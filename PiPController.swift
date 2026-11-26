@@ -206,9 +206,10 @@ final class PiPController: NSObject {
 
     private func enqueue(image: UIImage) {
         let presentationIndex = nextPresentationIndex()
+        let frame = image.aspectFitted(to: CGSize(width: 720, height: 720))
         guard let sample = ImageFrame.makeSampleBuffer(
-            from: image,
-            maxDimension: 900,
+            from: frame,
+            maxDimension: 720,
             frameIndex: presentationIndex) else {
             lastError = "buffer create failed"
             reportStats()
@@ -258,7 +259,7 @@ final class PiPController: NSObject {
     }
 
     private static func makeTestImage() -> UIImage? {
-        let size = CGSize(width: 720, height: 1280)
+        let size = CGSize(width: 720, height: 720)
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { context in
             let colors: [CGColor] = [
@@ -379,5 +380,30 @@ extension PiPController: AVPictureInPictureSampleBufferPlaybackDelegate {
         completion completionHandler: @escaping () -> Void
     ) {
         completionHandler()
+    }
+}
+
+// MARK: - 固定画布
+
+private extension UIImage {
+
+    /// 把任意尺寸的截图等比缩放并居中放进固定大小的黑底画布。
+    /// 画中画要求视频格式稳定，尺寸一变就会卡住。
+    func aspectFitted(to size: CGSize) -> UIImage {
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        return renderer.image { _ in
+            UIColor.black.setFill()
+            UIBezierPath(rect: CGRect(origin: .zero, size: size)).fill()
+
+            guard self.size.width > 0, self.size.height > 0 else { return }
+            let scale = min(size.width / self.size.width, size.height / self.size.height)
+            let drawSize = CGSize(width: self.size.width * scale, height: self.size.height * scale)
+            let origin = CGPoint(
+                x: (size.width - drawSize.width) / 2,
+                y: (size.height - drawSize.height) / 2)
+            self.draw(in: CGRect(origin: origin, size: drawSize))
+        }
     }
 }
